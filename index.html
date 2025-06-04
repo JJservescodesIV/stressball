@@ -1,19 +1,430 @@
-<div class="radio-input" id="theme">
-  <label class="label">
-    <input type="radio" checked="" name="value-radio" value="1" />
-    <p class="text">Stress Ball</p>
-  </label>
-  <label class="label">
-    <input type="radio" name="value-radio" value="2" />
-    <p class="text">Tennis Ball</p>
-  </label>
-</div>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stress Reliever App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            overscroll-behavior: none; /* Prevents pull-to-refresh on mobile */
+        }
+        canvas {
+            display: block;
+            touch-action: none; /* Prevents default touch actions like scrolling when interacting with canvas */
+            background-color: #f0f0f0; /* Light gray background for the canvas */
+            border-radius: 0.5rem; /* Corresponds to Tailwind's rounded-lg */
+        }
+        .instruction-text {
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-900 to-slate-700 text-slate-100 flex flex-col items-center justify-center min-h-screen p-4 selection:bg-sky-500 selection:text-white">
 
-<div class="presentation">
-  <h1>STRESS BALL</h1>
-  <p>Feel all your stress fade away</p>
-</div>
+    <div class="w-full max-w-3xl bg-slate-800 shadow-2xl rounded-xl p-6 md:p-8">
+        <header class="text-center mb-6">
+            <h1 class="text-4xl font-bold text-sky-400">Stress Reliever</h1>
+            <p class="text-slate-400 mt-2">Throw the ball, watch it bounce, and relax!</p>
+        </header>
 
-<div class="ball"></div>
+        <main class="flex flex-col items-center">
+            <!-- Canvas Container -->
+            <div id="canvas-container" class="w-full aspect-[4/3] max-w-xl shadow-lg rounded-lg mb-6 overflow-hidden">
+                <canvas id="stressBallCanvas"></canvas>
+            </div>
 
-<div class="hint backdrop">Drag and release the ball to make it spin and bounce</div>
+            <!-- Controls -->
+            <div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-6 w-full max-w-xl">
+                <button id="resetButton" class="w-full sm:w-auto bg-sky-500 hover:bg-sky-600 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-all duration-150 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-sky-400 focus:ring-opacity-75">
+                    Reset Ball
+                </button>
+                 <button id="toggleSoundButton" class="w-full sm:w-auto bg-emerald-500 hover:bg-emerald-600 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-all duration-150 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-opacity-75">
+                    Sound: ON
+                </button>
+            </div>
+
+            <!-- Instructions -->
+            <div class="bg-slate-700 p-4 rounded-lg shadow w-full max-w-xl">
+                <h2 class="text-xl font-semibold text-sky-300 mb-2">How to Play:</h2>
+                <ul class="list-disc list-inside text-slate-300 space-y-1 instruction-text">
+                    <li>Click (or tap) and drag the ball to throw it.</li>
+                    <li>The faster you drag, the faster it goes!</li>
+                    <li>The ball will bounce off the walls.</li>
+                    <li>Press "Reset Ball" to center it again.</li>
+                    <li>Toggle sound with the "Sound" button.</li>
+                </ul>
+            </div>
+        </main>
+
+        <footer class="text-center mt-8 text-sm text-slate-500">
+            <p>&copy; 2025 Stress Reliever App. Enjoy a moment of calm.</p>
+        </footer>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('stressBallCanvas');
+        const canvasContainer = document.getElementById('canvas-container');
+        const ctx = canvas.getContext('2d');
+        const resetButton = document.getElementById('resetButton');
+        const toggleSoundButton = document.getElementById('toggleSoundButton');
+
+        let soundEnabled = true;
+        let synth; // Will be initialized after first user interaction
+
+        // Ball properties
+        let ball = {
+            x: 0, // Initialized in initBall
+            y: 0, // Initialized in initBall
+            radius: 25,
+            dx: 0, // velocity x
+            dy: 0, // velocity y
+            color: 'rgba(56, 189, 248, 1)', // Tailwind sky-500
+            outlineColor: 'rgba(14, 165, 233, 1)', // Tailwind sky-600
+            isDragging: false,
+            dragStart: { x: 0, y: 0 },
+            mouseHistory: [], // To calculate throw velocity
+            maxHistory: 8, // Number of past mouse positions to consider
+
+            // Squish properties
+            isSquishing: false,
+            squishFactorX: 1.0,
+            squishFactorY: 1.0,
+            squishDuration: 120, // ms
+            squishIntensity: 0.3, // 30% squish/expand
+            squishStartTime: 0,
+            squishAxis: null, // 'x' or 'y' (axis of impact)
+            friction: 0.99, // Slows down over time
+            gravity: 0.05, // A very slight pull downwards
+            maxSpeed: 25, // Maximum speed for dx or dy
+            throwForceMultiplier: 0.08, // Adjusts throw sensitivity
+        };
+
+        // Function to initialize or reset the ball
+        function initBall() {
+            ball.x = canvas.width / 2;
+            ball.y = canvas.height / 2;
+            ball.dx = 0;
+            ball.dy = 0;
+            ball.isDragging = false;
+            ball.isSquishing = false;
+            ball.squishFactorX = 1.0;
+            ball.squishFactorY = 1.0;
+            ball.mouseHistory = [];
+        }
+        
+        // Function to initialize Tone.js synth (must be called after a user interaction)
+        function initializeAudio() {
+            if (!synth && Tone.context.state !== 'running') {
+                Tone.start().then(() => {
+                    console.log("Audio context started.");
+                    synth = new Tone.PolySynth(Tone.Synth, {
+                        oscillator: { type: "sine" },
+                        envelope: { attack: 0.005, decay: 0.1, sustain: 0.3, release: 0.3 }
+                    }).toDestination();
+                    synth.volume.value = -6; // Lower volume a bit
+                }).catch(e => console.error("Error starting Tone.js:", e));
+            } else if (!synth && Tone.context.state === 'running') {
+                 synth = new Tone.PolySynth(Tone.Synth, {
+                        oscillator: { type: "sine" },
+                        envelope: { attack: 0.005, decay: 0.1, sustain: 0.3, release: 0.3 }
+                    }).toDestination();
+                synth.volume.value = -6;
+            }
+        }
+
+
+        // Sound effect for bounce
+        function playBounceSound() {
+            if (soundEnabled && synth && Tone.context.state === 'running') {
+                const notes = ["C4", "E4", "G4", "C5"];
+                const randomNote = notes[Math.floor(Math.random() * notes.length)];
+                const velocityImpact = Math.min(1, (Math.abs(ball.dx) + Math.abs(ball.dy)) / (ball.maxSpeed * 0.8)); // Normalize impact for volume
+                synth.triggerAttackRelease(randomNote, "32n", Tone.now(), velocityImpact * 0.7 + 0.3);
+            }
+        }
+        
+        // Toggle sound
+        toggleSoundButton.addEventListener('click', () => {
+            soundEnabled = !soundEnabled;
+            toggleSoundButton.textContent = `Sound: ${soundEnabled ? 'ON' : 'OFF'}`;
+            toggleSoundButton.classList.toggle('bg-emerald-500', soundEnabled);
+            toggleSoundButton.classList.toggle('hover:bg-emerald-600', soundEnabled);
+            toggleSoundButton.classList.toggle('bg-red-500', !soundEnabled);
+            toggleSoundButton.classList.toggle('hover:bg-red-600', !soundEnabled);
+            if (soundEnabled && !synth) {
+                initializeAudio(); // Try to init audio if turned on and not ready
+            }
+        });
+
+
+        // Function to trigger squish animation
+        function triggerSquish(axis) {
+            if (ball.isSquishing) return; // Don't re-trigger if already squishing
+            ball.isSquishing = true;
+            ball.squishAxis = axis;
+            ball.squishStartTime = performance.now();
+            playBounceSound();
+        }
+
+        // Handle canvas sizing and resizing
+        function resizeCanvas() {
+            const containerWidth = canvasContainer.clientWidth;
+            const containerHeight = canvasContainer.clientHeight;
+            
+            // Maintain aspect ratio (e.g., 4:3)
+            const aspectRatio = 4 / 3;
+            let newWidth = containerWidth;
+            let newHeight = containerWidth / aspectRatio;
+
+            if (newHeight > containerHeight) {
+                newHeight = containerHeight;
+                newWidth = containerHeight * aspectRatio;
+            }
+            
+            canvas.width = newWidth; // Internal resolution
+            canvas.height = newHeight; // Internal resolution
+
+            // CSS dimensions are handled by Tailwind's aspect ratio and max-width
+            // No need to set canvas.style.width/height if using aspect ratio on container
+
+            initBall(); // Reset ball position on resize
+        }
+
+
+        // Mouse/Touch coordinate helper
+        function getEventCoordinates(event) {
+            const rect = canvas.getBoundingClientRect();
+            let clientX, clientY;
+            if (event.touches && event.touches.length > 0) {
+                clientX = event.touches[0].clientX;
+                clientY = event.touches[0].clientY;
+            } else {
+                clientX = event.clientX;
+                clientY = event.clientY;
+            }
+            // Scale coordinates to canvas internal resolution
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            return {
+                x: (clientX - rect.left) * scaleX,
+                y: (clientY - rect.top) * scaleY
+            };
+        }
+
+        // Event Handlers
+        function handleInteractionStart(event) {
+            if (!synth && soundEnabled) initializeAudio(); // Initialize audio on first interaction
+
+            const coords = getEventCoordinates(event);
+            const distance = Math.sqrt((coords.x - ball.x)**2 + (coords.y - ball.y)**2);
+
+            if (distance < ball.radius + 15) { // Allow a bit of leeway for grabbing
+                ball.isDragging = true;
+                ball.dx = 0;
+                ball.dy = 0;
+                ball.dragStart = { x: coords.x, y: coords.y };
+                ball.mouseHistory = [{ x: coords.x, y: coords.y, time: performance.now() }];
+                // Bring ball to front if there were multiple objects (not relevant here yet)
+                // Move ball slightly towards the cursor/finger for better grab feel
+                ball.x = coords.x; 
+                ball.y = coords.y;
+            }
+            if (event.cancelable) event.preventDefault();
+        }
+
+        function handleInteractionMove(event) {
+            if (ball.isDragging) {
+                const coords = getEventCoordinates(event);
+                ball.x = coords.x;
+                ball.y = coords.y;
+                ball.mouseHistory.push({ x: coords.x, y: coords.y, time: performance.now() });
+                if (ball.mouseHistory.length > ball.maxHistory) {
+                    ball.mouseHistory.shift();
+                }
+            }
+            if (event.cancelable) event.preventDefault();
+        }
+
+        function handleInteractionEnd(event) {
+            if (ball.isDragging) {
+                ball.isDragging = false;
+                if (ball.mouseHistory.length > 1) {
+                    // Use a few recent points for smoother velocity calculation
+                    const firstRelevantPoint = ball.mouseHistory[0];
+                    const lastPoint = ball.mouseHistory[ball.mouseHistory.length - 1];
+                    
+                    const timeDiff = (lastPoint.time - firstRelevantPoint.time) / 1000; // in seconds
+
+                    if (timeDiff > 0.01) { // Avoid division by zero or tiny time diffs
+                        let deltaX = lastPoint.x - firstRelevantPoint.x;
+                        let deltaY = lastPoint.y - firstRelevantPoint.y;
+                        
+                        ball.dx = (deltaX / timeDiff) * ball.throwForceMultiplier;
+                        ball.dy = (deltaY / timeDiff) * ball.throwForceMultiplier;
+
+                        // Cap speed
+                        ball.dx = Math.max(-ball.maxSpeed, Math.min(ball.maxSpeed, ball.dx));
+                        ball.dy = Math.max(-ball.maxSpeed, Math.min(ball.maxSpeed, ball.dy));
+                    }
+                }
+                ball.mouseHistory = [];
+            }
+             if (event.cancelable) event.preventDefault();
+        }
+
+        // Update ball state
+        function update() {
+            if (!ball.isDragging) {
+                // Apply gravity
+                ball.dy += ball.gravity;
+
+                // Apply friction
+                ball.dx *= ball.friction;
+                ball.dy *= ball.friction;
+                
+                // Stop if moving very slowly
+                if (Math.abs(ball.dx) < 0.05) ball.dx = 0;
+                if (Math.abs(ball.dy) < 0.05 && Math.abs(ball.y - (canvas.height - ball.radius)) < 1) ball.dy = 0;
+
+
+                ball.x += ball.dx;
+                ball.y += ball.dy;
+
+                // Wall collisions
+                let collided = false;
+                // Right wall
+                if (ball.x + ball.radius > canvas.width) {
+                    ball.x = canvas.width - ball.radius;
+                    ball.dx *= -0.85; // Dampen on bounce
+                    triggerSquish('x');
+                    collided = true;
+                }
+                // Left wall
+                if (ball.x - ball.radius < 0) {
+                    ball.x = ball.radius;
+                    ball.dx *= -0.85;
+                    triggerSquish('x');
+                    collided = true;
+                }
+                // Bottom wall
+                if (ball.y + ball.radius > canvas.height) {
+                    ball.y = canvas.height - ball.radius;
+                    ball.dy *= -0.85;
+                    // If ball is slow after hitting bottom, make it stop to prevent jitter
+                    if (Math.abs(ball.dy) < 1) ball.dy = 0; 
+                    triggerSquish('y');
+                    collided = true;
+                }
+                // Top wall
+                if (ball.y - ball.radius < 0) {
+                    ball.y = ball.radius;
+                    ball.dy *= -0.85;
+                    triggerSquish('y');
+                    collided = true;
+                }
+            }
+
+            // Squish animation logic
+            if (ball.isSquishing) {
+                const elapsed = performance.now() - ball.squishStartTime;
+                const progress = elapsed / ball.squishDuration;
+
+                if (progress >= 1) {
+                    ball.isSquishing = false;
+                    ball.squishFactorX = 1.0;
+                    ball.squishFactorY = 1.0;
+                } else {
+                    // Oscillation: 0 -> 1 -> 0 (sin(pi * x) for x in [0,1])
+                    const oscillation = Math.sin(progress * Math.PI);
+                    if (ball.squishAxis === 'x') { // Hit vertical wall, squishes horizontally
+                        ball.squishFactorX = 1 - ball.squishIntensity * oscillation; // Squish along impact axis
+                        ball.squishFactorY = 1 + ball.squishIntensity * oscillation; // Expand perpendicular
+                    } else { // Hit horizontal wall, squishes vertically
+                        ball.squishFactorY = 1 - ball.squishIntensity * oscillation;
+                        ball.squishFactorX = 1 + ball.squishIntensity * oscillation;
+                    }
+                }
+            }
+        }
+
+        // Draw everything
+        function draw() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw ball with potential squish
+            ctx.save(); // Save current context state
+            ctx.translate(ball.x, ball.y); // Move origin to ball's center
+
+            // Apply squish scaling
+            ctx.scale(ball.squishFactorX, ball.squishFactorY);
+
+            // Draw ball (centered at new origin 0,0)
+            ctx.beginPath();
+            ctx.arc(0, 0, ball.radius, 0, Math.PI * 2);
+            
+            // Gradient fill for a more 3D look
+            const gradient = ctx.createRadialGradient(
+                -ball.radius * 0.25, -ball.radius * 0.25, ball.radius * 0.1, // Inner circle (highlight)
+                0, 0, ball.radius // Outer circle
+            );
+            gradient.addColorStop(0, 'rgba(125, 211, 252, 1)'); // sky-300 (lighter)
+            gradient.addColorStop(0.8, ball.color);             // sky-500 (main)
+            gradient.addColorStop(1, ball.outlineColor);       // sky-600 (darker edge)
+
+            ctx.fillStyle = gradient;
+            ctx.fill();
+            
+            // Outline
+            ctx.strokeStyle = ball.outlineColor;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            ctx.closePath();
+            ctx.restore(); // Restore context to pre-translate/scale state
+        }
+
+        // Animation loop
+        let lastTime = 0;
+        function gameLoop(timestamp) {
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+
+            update(deltaTime);
+            draw();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Event Listeners
+        resetButton.addEventListener('click', () => {
+            if (!synth && soundEnabled) initializeAudio();
+            initBall();
+        });
+
+        // Mouse events
+        canvas.addEventListener('mousedown', handleInteractionStart);
+        window.addEventListener('mousemove', handleInteractionMove); // Listen on window for dragging outside canvas
+        window.addEventListener('mouseup', handleInteractionEnd);   // Listen on window for releasing outside
+
+        // Touch events
+        canvas.addEventListener('touchstart', handleInteractionStart, { passive: false });
+        window.addEventListener('touchmove', handleInteractionMove, { passive: false });
+        window.addEventListener('touchend', handleInteractionEnd, { passive: false });
+        window.addEventListener('touchcancel', handleInteractionEnd, { passive: false });
+
+
+        // Initial setup
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas(); // Initial sizing
+        initBall();     // Initial ball setup
+        requestAnimationFrame(gameLoop); // Start animation
+        
+        // A little message for the console
+        console.log("Stress Reliever App Initialized. Enjoy!");
+    </script>
+</body>
+</html>
